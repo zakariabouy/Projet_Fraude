@@ -1,0 +1,70 @@
+# Single source of truth for the pipeline. Every number used in the results comes from here.
+seed: 42
+
+paths:
+  raw_data: data/raw/creditcard.csv
+  models_dir: models
+  reports_dir: reports
+  figures_dir: reports/figures
+  mlflow_db: mlflow.db
+  mlflow_artifacts: mlruns
+
+data:
+  # Kaggle mlg-ulb/creditcardfraud (ULB / Worldline). Same file, public mirror used by the
+  # TensorFlow imbalanced-data tutorial (no Kaggle credentials needed).
+  url: https://storage.googleapis.com/download.tensorflow.org/data/creditcard.csv
+  expected_rows: 284807
+  expected_frauds: 492
+
+split:
+  # Chronological split on `Time` (no shuffling): train on the past, evaluate on the future.
+  fractions: [0.60, 0.20, 0.20]
+  # Validation and test each need ~80+ frauds for stable metrics. The fraud rate drops on
+  # day 2 (0.21% in the first 60% of the timeline, 0.10% in the next 20%), so 60/20/20
+  # leaves only 57 / 75 frauds. Giving *more* time to validation and test fixes it
+  # (50/25/25: 129 / 94); 70/15/15 would make it worse (56 / 52).
+  min_frauds: 80
+  fallback_fractions: [0.50, 0.25, 0.25]
+
+features:
+  night_hours: [0, 6]   # [start, end) hour of day flagged as night
+
+tuning:
+  n_trials: 50          # Optuna TPE trials
+  cv_splits: 4          # TimeSeriesSplit folds inside the training period
+  timeout_s: null
+
+calibration:
+  methods: [isotonic, sigmoid]
+  # Calibrating and choosing the threshold on the same rows overfits. Validation is cut in
+  # `cross_fit_folds` chronological blocks: each block is scored by a calibrator fitted on
+  # the others. The method and the threshold are chosen on these out-of-fold probabilities,
+  # then the final calibrator is refitted on the whole validation period.
+  cross_fit_folds: 2
+  # Selection: lowest out-of-fold Brier score; scores within 1% are a tie, broken by the
+  # lowest log-loss (penalises near-zero probabilities given to frauds).
+  brier_tie_tolerance: 0.01
+
+cost:
+  # Documented business hypotheses (EUR). See the sensitivity analysis for how much they matter.
+  c_inv: 5.0                 # cost of one analyst investigation
+  c_fp: 10.0                 # customer friction when a legitimate transaction is blocked
+  recovery_rate: 0.8         # share of the fraud amount saved when the fraud is alerted
+  capacity_per_hour: 10      # K: alerts the fraud team can investigate per hour
+  threshold_grid_size: 999   # thresholds tested in (0, 1)
+
+sensitivity:
+  c_inv: [2, 5, 10, 20]
+  c_fp: [0, 10, 25, 50]
+  capacity_per_hour: [5, 10, 20, 40]
+
+bootstrap:
+  n_resamples: 1000
+  alpha: 0.05
+
+shap:
+  sample_size: 5000
+  max_display: 15
+
+monitoring:
+  psi_bins: 10

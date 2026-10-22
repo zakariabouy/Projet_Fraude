@@ -1,0 +1,5 @@
+*
+!requirements.txt
+!src/
+!models/fraud_model.joblib
+**/__pycache__

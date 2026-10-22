@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# Data (download with `make data`; the dataset is not redistributed here)
+data/
+
+# Experiment tracking (local MLflow store)
+mlruns/
+mlflow.db
+
+# Smoke runs and scratch outputs
+artifacts/
+
+# Personal interview preparation, not part of the public repo
+Dossier_Entretien_*.pdf
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# The trained model (models/fraud_model.joblib, a few MB) and reports/ ARE versioned on purpose:
+# the README numbers, the Docker image and the demo all come from them.

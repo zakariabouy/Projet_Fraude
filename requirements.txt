@@ -1,0 +1,14 @@
+# Runtime dependencies of the API (what goes into the Docker image).
+# Pinned to the training environment: the pickled model must be loaded with the exact
+# scikit-learn / XGBoost versions it was trained with.
+fastapi==0.159.1
+uvicorn==0.54.0
+pydantic==2.14.1
+numpy==2.4.6
+pandas==3.0.6
+scipy==1.17.1
+scikit-learn==1.9.1
+joblib==1.6.0
+# xgboost-cpu = same library without the ~300 MB CUDA/NCCL dependency of the Linux wheel.
+xgboost-cpu==3.2.0 ; sys_platform == "linux"
+xgboost==3.2.0 ; sys_platform != "linux"
