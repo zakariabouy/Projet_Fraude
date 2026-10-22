@@ -16,6 +16,14 @@ from pathlib import Path
 from src.config import ROOT, load_config
 
 README_START, README_END = "<!-- RESULTS:START -->", "<!-- RESULTS:END -->"
+HEADLINE_START, HEADLINE_END = "<!-- HEADLINE:START -->", "<!-- HEADLINE:END -->"
+STATIC_BADGES = [
+    ("Python 3.11", "python-3.11-3776AB?logo=python&logoColor=white"),
+    ("XGBoost", "model-XGBoost-1f4e79"),
+    ("FastAPI", "API-FastAPI-009688?logo=fastapi&logoColor=white"),
+    ("Docker", "container-Docker-2496ED?logo=docker&logoColor=white"),
+    ("MLflow", "tracking-MLflow-0194E2?logo=mlflow&logoColor=white"),
+]
 
 POLICY_FR = {
     "do_nothing": "Aucune alerte",
@@ -679,21 +687,67 @@ def readme_section(res: dict) -> str:
     return "\n".join(lines)
 
 
-def replace_readme_section(readme: Path, section: str) -> None:
+def readme_headline(res: dict, links: dict) -> str:
+    """Top of the README: badges, the result in one sentence, the demo GIF, quick links."""
+    space, repo = links.get("hf_space"), links.get("github_repo")
+    test = res["split"]["test"]
+    red = res["cost_reduction"]["xgb_topk_profitable_vs_xgb_raw_0.5"]
+    badges = []
+    if space:
+        badges.append(
+            f"[![Live demo](https://img.shields.io/badge/live%20demo-Hugging%20Face-FFD21E"
+            f"?logo=huggingface&logoColor=black)](https://huggingface.co/spaces/{space})"
+        )
+    if repo:
+        badges.append(
+            f"[![CI](https://github.com/{repo}/actions/workflows/ci.yml/badge.svg)]"
+            f"(https://github.com/{repo}/actions/workflows/ci.yml)"
+        )
+    badges += [f"![{alt}](https://img.shields.io/badge/{spec})" for alt, spec in STATIC_BADGES]
+    try_it = (
+        f"**[Try the live dashboard](https://huggingface.co/spaces/{space})**"
+        if space
+        else "Run the dashboard: `make dashboard`"
+    )
+    sig = "" if red["lo"] > 0 else ", not significant"
+    lines = [
+        HEADLINE_START,
+        " ".join(badges),
+        "",
+        f"**On a held-out future period of {test['rows']:,} real card transactions, ranking the "
+        f"alerts by expected loss under the analysts' capacity cuts the total fraud cost by "
+        f"{100 * red['value']:.0f}% compared with the model's default threshold "
+        f"(95% CI {100 * red['lo']:.0f}% to {100 * red['hi']:.0f}%{sig}).**",
+        "",
+        "![Dashboard: policies compared at constant capacity, then the SHAP reason codes of an "
+        "alert](docs/dashboard_demo.gif)",
+        "",
+        f"{try_it} · [Results](#results) · [Method](#method) · [API](#api) · "
+        f"[French interview sheet](reports/fiche_resultats.md)",
+        HEADLINE_END,
+    ]
+    return "\n".join(lines)
+
+
+def replace_block(readme: Path, start: str, end: str, block: str) -> None:
     text = readme.read_text(encoding="utf-8")
-    pattern = re.compile(re.escape(README_START) + ".*?" + re.escape(README_END), re.DOTALL)
+    pattern = re.compile(re.escape(start) + ".*?" + re.escape(end), re.DOTALL)
     if not pattern.search(text):
-        raise ValueError(f"RESULTS markers not found in {readme}")
-    readme.write_text(pattern.sub(lambda _: section, text), encoding="utf-8")
+        raise ValueError(f"{start} ... {end} markers not found in {readme}")
+    readme.write_text(pattern.sub(lambda _: block, text), encoding="utf-8")
 
 
 def write_reports(results: dict, out_root: Path, update_readme: bool = True) -> None:
-    reports_dir = out_root / load_config()["paths"]["reports_dir"]
+    cfg = load_config()
+    reports_dir = out_root / cfg["paths"]["reports_dir"]
     reports_dir.mkdir(parents=True, exist_ok=True)
     (reports_dir / "fiche_resultats.md").write_text(fiche_markdown(results), encoding="utf-8")
     readme = out_root / "README.md"
     if update_readme and readme.exists():
-        replace_readme_section(readme, readme_section(results))
+        replace_block(readme, README_START, README_END, readme_section(results))
+        if HEADLINE_START in readme.read_text(encoding="utf-8"):
+            headline = readme_headline(results, cfg.get("links") or {})
+            replace_block(readme, HEADLINE_START, HEADLINE_END, headline)
 
 
 def main() -> None:

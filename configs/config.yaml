@@ -68,3 +68,9 @@ shap:
 
 monitoring:
   psi_bins: 10
+
+links:
+  # Public pages, shown as badges at the top of the README only once they are set.
+  hf_space: Zakariaebouy/fraud-decision-dashboard       # Hugging Face Space id, e.g. "Zakariaebouy/fraud-decision-dashboard"
+                       # (`python -m src.space publish` fills it in)
+  github_repo: null    # GitHub "owner/repo", once the code is pushed (CI badge + links)

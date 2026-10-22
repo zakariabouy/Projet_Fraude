@@ -19,5 +19,9 @@ switch ($Task) {
     "mlflow"       { & $py -m mlflow ui --backend-store-uri sqlite:///mlflow.db --port 5000 }
     "docker-build" { docker build -t fraud-api . }
     "docker-run"   { docker run --rm -p 8000:8000 fraud-api }
-    default        { Write-Host "Targets: install data train train-fast smoke report test lint format api dashboard mlflow docker-build docker-run" }
+    "space"        { & $py -m src.space build }
+    "space-preview" { & $py -m src.space build; if ($?) { & $py -m http.server 8765 --bind 127.0.0.1 --directory dist/hf_space } }
+    "space-publish" { & $py -m src.space publish --repo-id $(if ($args[0]) { $args[0] } else { "Zakariaebouy/fraud-decision-dashboard" }) }
+    "space-run"    { & $py -m src.space build --docker; if ($?) { docker build -t fraud-dashboard dist/hf_space_docker; docker run --rm -p 8501:8501 fraud-dashboard } }
+    default        { Write-Host "Targets: install data train train-fast smoke report test lint format api dashboard mlflow docker-build docker-run space space-preview space-publish space-run" }
 }

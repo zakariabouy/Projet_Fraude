@@ -11,9 +11,11 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 
@@ -35,7 +37,7 @@ from src.predict import FraudScorer  # noqa: E402
 PROCESSED = ROOT / "data" / "processed"
 REPORTS = ROOT / "reports"
 
-st.set_page_config(page_title="Fraud decision dashboard", layout="wide")
+st.set_page_config(page_title="Fraud decision dashboard", page_icon="🛡️", layout="wide")
 
 
 @st.cache_resource
@@ -87,10 +89,19 @@ results = load_results()
 base = scorer.cost_params
 
 st.title("Fraud detection: from score to decision")
+fraud_eur = test.loc[test["Class"] == 1, "Amount"].sum()
+st.markdown(
+    f"A fraud team can only investigate **K alerts per hour**. Which transactions should it "
+    f"look at? Three policies are replayed on a held-out period of **{len(test):,} real card "
+    f"transactions** ({int(test['Class'].sum())} frauds, {fraud_eur:,.0f} EUR stolen), never "
+    f"seen in training. Each one is scored by its total cost: missed fraud, investigation "
+    f"time and customers blocked by mistake. **Move the sliders** to change the business "
+    f"hypotheses; open the **Alerts** tab to see why the model flags a transaction."
+)
+repo_url = os.environ.get("REPO_URL")
 st.caption(
-    f"Model {scorer.version} · calibration: {scorer.calibration_method} · test period: "
-    f"{len(test):,} transactions, {int(test['Class'].sum())} frauds, "
-    f"{test.loc[test['Class'] == 1, 'Amount'].sum():,.0f} EUR of fraud"
+    f"Model {scorer.version} · XGBoost + {scorer.calibration_method} calibration · SHAP reason "
+    f"codes" + (f" · [code and method on GitHub]({repo_url})" if repo_url else "")
 )
 
 with st.sidebar:
@@ -105,8 +116,8 @@ params = CostParams(c_inv, c_fp, r, k)
 t_star, curve = choose_threshold(c_inv, c_fp, r, k)
 y, p, amount, hour = test["Class"], test["p_cal"], test["Amount"], test["hour"]
 policies = {
-    "Uncalibrated model, threshold 0.5": threshold_policy(test["p_raw"], 0.5, hour, k),
-    f"Cost-optimal threshold t* = {t_star:.3f}": threshold_policy(p, t_star, hour, k),
+    "Model's default threshold (0.5)": threshold_policy(test["p_raw"], 0.5, hour, k),
+    f"Threshold tuned on validation (t* = {t_star:.3f})": threshold_policy(p, t_star, hour, k),
     "Top-K by expected loss (profitable only)": topk_policy(
         p, amount, hour, k, params, only_profitable=True
     ),
@@ -127,6 +138,7 @@ with decision_tab:
             f"{int(row['n_alerts'])} alerts · {int(row['tp'])} frauds caught · "
             f"{int(row['fp'])} false positives · {100 * row['amount_recall']:.0f}% of fraud EUR caught"
         )
+    st.caption("Total cost on the held-out period; the arrows compare with the default threshold.")
     st.subheader("Cost of the threshold policy on validation")
     st.line_chart(curve.set_index("threshold")[["cost"]], x_label="threshold", y_label="EUR")
     st.dataframe(
@@ -165,7 +177,17 @@ with alerts_tab:
         )
         codes = scorer.explain(test.loc[[pick], RAW_FEATURES])[0]
         st.write("**Reason codes** (SHAP, log-odds pushing towards fraud):")
-        st.bar_chart(pd.DataFrame(codes).set_index("feature")["contribution"], horizontal=True)
+        bars = (
+            alt.Chart(pd.DataFrame(codes))
+            .mark_bar(color="#1f4e79")
+            .encode(
+                x=alt.X("contribution:Q", title="SHAP contribution (log-odds)"),
+                y=alt.Y("feature:N", sort="-x", title=None),
+                tooltip=["feature", "label", "value", "contribution"],
+            )
+            .properties(height=140)
+        )
+        st.altair_chart(bars, width="stretch")
         st.table(pd.DataFrame(codes)[["feature", "label", "value", "contribution"]])
 
 with model_tab:

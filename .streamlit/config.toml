@@ -1,0 +1,12 @@
+[server]
+headless = true
+
+[browser]
+gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"   # hides the developer "Deploy" button for visitors
+
+[theme]
+base = "light"
+primaryColor = "#1f4e79"

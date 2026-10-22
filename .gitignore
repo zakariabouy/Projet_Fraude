@@ -12,8 +12,9 @@ data/
 mlruns/
 mlflow.db
 
-# Smoke runs and scratch outputs
+# Smoke runs, scratch outputs, generated Hugging Face Space (`make space`)
 artifacts/
+dist/
 
 # Personal interview preparation, not part of the public repo
 Dossier_Entretien_*.pdf

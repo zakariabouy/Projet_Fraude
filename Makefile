@@ -2,7 +2,9 @@
 PYTHON ?= python
 IMAGE  ?= fraud-api
 
-.PHONY: install data train train-fast smoke report test lint format api dashboard mlflow docker-build docker-run clean
+SPACE  ?= Zakariaebouy/fraud-decision-dashboard
+
+.PHONY: install data train train-fast smoke report test lint format api dashboard mlflow docker-build docker-run space space-preview space-publish space-run clean
 
 install:        ## install all dependencies (training, API, tests)
 	$(PYTHON) -m pip install -r requirements-dev.txt
@@ -46,5 +48,18 @@ docker-build:
 docker-run:
 	docker run --rm -p 8000:8000 $(IMAGE)
 
+space:          ## build the live demo (static Hugging Face Space) in dist/hf_space
+	$(PYTHON) -m src.space build
+
+space-preview: space  ## serve the live demo locally: http://localhost:8765
+	$(PYTHON) -m http.server 8765 --bind 127.0.0.1 --directory dist/hf_space
+
+space-publish:  ## publish the live demo (run `hf auth login` once before)
+	$(PYTHON) -m src.space publish --repo-id $(SPACE)
+
+space-run:      ## Streamlit dashboard as a Docker Space, run locally: http://localhost:8501
+	$(PYTHON) -m src.space build --docker
+	docker build -t fraud-dashboard dist/hf_space_docker && docker run --rm -p 8501:8501 fraud-dashboard
+
 clean:
-	rm -rf artifacts .pytest_cache .ruff_cache
+	rm -rf artifacts dist .pytest_cache .ruff_cache

@@ -1,11 +1,32 @@
 # Fraud detection: from data to decision, in production
 
+<!-- HEADLINE:START -->
+[![Live demo](https://img.shields.io/badge/live%20demo-Hugging%20Face-FFD21E?logo=huggingface&logoColor=black)](https://huggingface.co/spaces/Zakariaebouy/fraud-decision-dashboard) ![Python 3.11](https://img.shields.io/badge/python-3.11-3776AB?logo=python&logoColor=white) ![XGBoost](https://img.shields.io/badge/model-XGBoost-1f4e79) ![FastAPI](https://img.shields.io/badge/API-FastAPI-009688?logo=fastapi&logoColor=white) ![Docker](https://img.shields.io/badge/container-Docker-2496ED?logo=docker&logoColor=white) ![MLflow](https://img.shields.io/badge/tracking-MLflow-0194E2?logo=mlflow&logoColor=white)
+
+**On a held-out future period of 71,202 real card transactions, ranking the alerts by expected loss under the analysts' capacity cuts the total fraud cost by 37% compared with the model's default threshold (95% CI 12% to 59%).**
+
+![Dashboard: policies compared at constant capacity, then the SHAP reason codes of an alert](docs/dashboard_demo.gif)
+
+**[Try the live dashboard](https://huggingface.co/spaces/Zakariaebouy/fraud-decision-dashboard)** · [Results](#results) · [Method](#method) · [API](#api) · [French interview sheet](reports/fiche_resultats.md)
+<!-- HEADLINE:END -->
+
 A bank cannot investigate every suspicious transaction. Analysts have a limited capacity,
 every alert costs time, and every legitimate customer blocked by mistake may leave.
 This project does not stop at maximising a score: it **chooses the alerts that minimise the
 total cost** (missed fraud + investigations + customer friction) **under the analysts'
-capacity constraint**. Probabilities are calibrated, every alert is explained with SHAP,
-and the model is served by a FastAPI API in Docker, tested in CI and tracked with MLflow.
+capacity constraint**.
+
+**What's inside**
+
+- **Decision layer**: a cost model with a capacity of K alerts per hour; a threshold tuned on
+  validation vs a top-K queue ranked by expected loss; sensitivity to every cost hypothesis.
+- **Model**: calibrated XGBoost against logistic regression and random forest baselines.
+  Chronological split, Optuna with time-series cross-validation, a 95% bootstrap interval on
+  every headline number.
+- **Explainability and monitoring**: SHAP reason codes for every alert, PSI drift checks.
+- **Production**: FastAPI service in Docker, unit and API tests plus a Docker smoke test in
+  GitHub Actions, MLflow tracking, and a Streamlit dashboard that can be deployed to Hugging
+  Face Spaces.
 
 ## Results
 
@@ -83,6 +104,7 @@ make test         # unit tests (no dataset needed)
 make api          # http://localhost:8000/docs
 make dashboard    # http://localhost:8501
 make mlflow       # http://localhost:5000
+make space-preview  # the live demo page, served locally: http://localhost:8765
 ```
 
 `make train-fast` reuses the tuned hyper-parameters (`models/best_params.json`) and skips
@@ -105,8 +127,11 @@ src/
   train.py                 end-to-end orchestration
   report.py                README results + French interview sheet from results.json
   predict.py               production bundle + FraudScorer (API and dashboard)
+  space.py                 builds and publishes the live demo (Hugging Face Space)
   api/main.py, schemas.py  FastAPI service
-app/dashboard.py           Streamlit decision dashboard
+app/dashboard.py           Streamlit decision dashboard (runs the Python model)
+app/static/                live demo: index.html + decision.js (decision rules in the browser)
+docs/                      dashboard GIF and screenshot, record_demo.py to re-record them
 tests/                     pytest: cost function, features, metrics, split, PSI, SHAP, API
 models/                    fraud_model.joblib, best_params.json
 reports/                   results.json, fiche_resultats.md, figures/
@@ -234,6 +259,33 @@ identical to the training environment (max difference 4e-19 on 2,000 test transa
 422 on invalid input, top-K queue never above the requested capacity, median server-side
 latency 10.9 ms per transaction (p90 11.7 ms) with reason codes.
 
+## Live demo (Hugging Face Space)
+
+The live dashboard is a **static** Hugging Face Space (free, loads instantly, never sleeps).
+`make space` builds it in `dist/hf_space/` (4 MB): `app/static/index.html` and
+`app/static/decision.js`, fed with the model's scores on the validation and test periods.
+The decision rules (cost model, hourly capacity, threshold search on validation, top-K
+queue) run in the visitor's browser, and `tests/test_decision_js.py` runs them with Node to
+check they give exactly the Python numbers. SHAP reason codes are precomputed with the real
+model for every transaction that can become an alert. `make space-preview` serves it locally.
+
+```bash
+hf auth login                      # once (`pip install huggingface_hub`)
+make space-publish                 # = python -m src.space publish --repo-id <user>/fraud-decision-dashboard
+```
+
+Publishing records the Space in `configs/config.yaml` (`links.hf_space`) and regenerates the
+top of this README with the live-demo badge. After pushing the code to GitHub, set
+`links.github_repo` and run `make report` to add the CI badge.
+
+The Streamlit dashboard (`app/dashboard.py`) runs the Python model itself. It can be packaged
+as a Docker Space (`python -m src.space build --docker`, requirements taken from the pinned
+files), but Hugging Face only hosts Docker Spaces on a paid plan; `make space-run` builds and
+runs that image locally.
+
+`docs/dashboard_demo.gif` is recorded from the live page by `docs/record_demo.py`
+(Playwright, driving the installed Edge or Chrome).
+
 ## Experiment tracking
 
 Each `make train` logs an MLflow run (`sqlite:///mlflow.db`): split, cost hypotheses,
@@ -246,9 +298,10 @@ policy, Brier scores, PSI, plus the figures, `results.json` and the model bundle
 `make test` covers the cost function on hand-computed cases, capacity enforcement, the
 threshold search, features (shape, no NaN, no leakage of statistics, cyclic hour), the fast
 bootstrap (equal to scikit-learn), the split, PSI, SHAP additivity and equality with the
-`shap` library, and the API (200, response format, 422 on invalid input, 503 without a
-model). GitHub Actions runs lint (ruff), tests and a synthetic end-to-end run on every push,
-then builds the Docker image and calls the running container.
+`shap` library, the API (200, response format, 422 on invalid input, 503 without a
+model), and the live demo's JavaScript against the Python decision rules. GitHub Actions runs
+lint (ruff), tests and a synthetic end-to-end run on every push, then builds the Docker image
+and calls the running container.
 
 ## Limitations
 

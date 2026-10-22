@@ -1,0 +1,441 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fraud Decision Dashboard</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
+<meta name="description" content="Which fraud alerts should analysts investigate? Policies compared at constant capacity on real card transactions, with SHAP reason codes.">
+<style>
+  :root {
+    --bg: #f5f6f8; --panel: #ffffff; --ink: #1c2331; --muted: #5d6677; --line: #e2e6ec;
+    --accent: #1f4e79; --accent-soft: #e8eff7; --good: #1d7a4c; --good-bg: #e4f3ea;
+    --bad: #b3261e; --bad-bg: #fbe8e6; --shade: rgba(192, 57, 43, 0.08); --chip: #eef1f5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1217; --panel: #171b22; --ink: #e5e8ee; --muted: #9aa3b2; --line: #2a303a;
+      --accent: #8bb8e8; --accent-soft: #1d2a3a; --good: #63c491; --good-bg: #163126;
+      --bad: #f08a80; --bad-bg: #3a1f1d; --shade: rgba(240, 138, 128, 0.10); --chip: #222833;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  a { color: var(--accent); }
+  header, .layout, footer { max-width: 1240px; margin: 0 auto; padding: 0 16px; }
+  header { padding-top: 28px; }
+  h1 { font-size: clamp(1.6rem, 3.2vw, 2.3rem); margin: 0 0 10px; letter-spacing: -0.01em; }
+  .intro { max-width: 900px; margin: 0 0 8px; }
+  .meta { color: var(--muted); font-size: 0.85rem; margin: 0 0 20px; }
+  .layout { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 24px; align-items: start; }
+  /* minmax(0, ...) lets wide tables scroll inside their panel instead of widening the page */
+  @media (max-width: 860px) { .layout { grid-template-columns: minmax(0, 1fr); } }
+  main { min-width: 0; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+  aside.panel { position: sticky; top: 16px; }
+  @media (max-width: 860px) { aside.panel { position: static; } }
+  aside h2 { font-size: 1rem; margin: 0 0 12px; }
+  .control { margin-bottom: 16px; }
+  .control label { display: flex; justify-content: space-between; font-size: 0.88rem; }
+  .control output { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--accent); }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  .note { color: var(--muted); font-size: 0.8rem; margin: 6px 0 0; }
+  button { font: inherit; cursor: pointer; }
+  .reset { border: 1px solid var(--line); background: var(--chip); color: var(--ink);
+           border-radius: 8px; padding: 6px 10px; font-size: 0.85rem; }
+  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 18px; }
+  .tabs button { border: 0; background: none; color: var(--muted); padding: 8px 14px;
+                 border-bottom: 2px solid transparent; margin-bottom: -1px; }
+  .tabs button[aria-selected=true] { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+  .cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+  @media (max-width: 760px) { .cards { grid-template-columns: 1fr; } }
+  .card h3 { font-size: 0.86rem; font-weight: 500; color: var(--muted); margin: 0 0 4px; }
+  .card .value { font-size: 1.9rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .card.best { border-color: var(--good); box-shadow: inset 0 3px 0 var(--good); }
+  .delta { display: inline-block; font-size: 0.8rem; font-weight: 600; border-radius: 999px; padding: 1px 9px; margin: 4px 0 6px; }
+  .delta.down { color: var(--good); background: var(--good-bg); }
+  .delta.up { color: var(--bad); background: var(--bad-bg); }
+  .delta.ref { color: var(--muted); background: var(--chip); }
+  .card .detail { color: var(--muted); font-size: 0.82rem; margin: 0; }
+  .caption { color: var(--muted); font-size: 0.82rem; margin: 10px 0 22px; }
+  h2.section { font-size: 1.1rem; margin: 6px 0 10px; }
+  .chart svg { width: 100%; height: auto; display: block; }
+  .chart .axis { stroke: var(--line); }
+  .chart text { fill: var(--muted); font-size: 11px; }
+  .chart .line { fill: none; stroke: var(--accent); stroke-width: 2; }
+  .chart .tstar { stroke: var(--good); stroke-width: 2; }
+  .chart .infeasible { fill: var(--shade); }
+  .chart .hover { stroke: var(--muted); stroke-dasharray: 3 3; }
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; color: var(--muted); font-size: 0.8rem; margin-top: 6px; }
+  .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -2px; margin-right: 5px; }
+  .table-wrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.86rem; font-variant-numeric: tabular-nums; }
+  th, td { text-align: right; padding: 7px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: 500; }
+  tbody tr.clickable { cursor: pointer; }
+  tbody tr.clickable:hover, tbody tr.selected { background: var(--accent-soft); }
+  .pills { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+  .pills button { border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+                  border-radius: 999px; padding: 5px 12px; font-size: 0.84rem; }
+  .pills button[aria-pressed=true] { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .alerts-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+  @media (max-width: 1000px) { .alerts-grid { grid-template-columns: minmax(0, 1fr); } }
+  #alerts-table th, #alerts-table td { padding: 7px 8px; }
+  .scroll { max-height: 430px; overflow: auto; }
+  .reason { margin: 10px 0; }
+  .reason .row { display: flex; justify-content: space-between; font-size: 0.85rem; }
+  .reason .bar { height: 10px; border-radius: 5px; background: var(--accent); margin-top: 4px; }
+  .reason .bar.neg { background: var(--muted); }
+  .badge { font-size: 0.75rem; border-radius: 999px; padding: 1px 8px; }
+  .badge.fraud { color: var(--bad); background: var(--bad-bg); }
+  .badge.legit { color: var(--muted); background: var(--chip); }
+  .figures { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 16px; }
+  @media (max-width: 860px) { .figures { grid-template-columns: 1fr; } }
+  figure { margin: 0; background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 10px; }
+  figure img { width: 100%; height: auto; display: block; }
+  figcaption { color: #5d6677; font-size: 0.8rem; margin-top: 6px; }
+  footer { color: var(--muted); font-size: 0.8rem; padding: 26px 16px 40px; }
+  #loading { padding: 40px 0; color: var(--muted); }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Fraud detection: from score to decision</h1>
+  <p class="intro" id="intro">A fraud team can only investigate <strong>K alerts per hour</strong>. Which transactions should it look at?</p>
+  <p class="meta" id="meta"></p>
+</header>
+
+<div class="layout">
+  <aside class="panel" aria-label="Business hypotheses">
+    <h2>Business hypotheses</h2>
+    <div class="control"><label for="c_inv">Investigation cost c_inv <output id="c_inv_out"></output></label>
+      <input id="c_inv" type="range" min="0" max="50" step="1"></div>
+    <div class="control"><label for="c_fp">Customer friction c_fp <output id="c_fp_out"></output></label>
+      <input id="c_fp" type="range" min="0" max="100" step="5"></div>
+    <div class="control"><label for="recovery_rate">Recovery rate r <output id="recovery_rate_out"></output></label>
+      <input id="recovery_rate" type="range" min="0" max="1" step="0.05"></div>
+    <div class="control"><label for="capacity_per_hour">Capacity K (alerts / hour) <output id="capacity_per_hour_out"></output></label>
+      <input id="capacity_per_hour" type="range" min="1" max="60" step="1"></div>
+    <button class="reset" id="reset" type="button">Reset to the study's hypotheses</button>
+    <p class="note">The threshold is re-chosen on the validation period for these hypotheses, then applied to the test period, as in training.</p>
+  </aside>
+
+  <main>
+    <div id="loading">Loading 142,404 scored transactions…</div>
+    <div id="app" hidden>
+      <nav class="tabs" role="tablist">
+        <button role="tab" aria-selected="true" data-tab="decision">Decision</button>
+        <button role="tab" aria-selected="false" data-tab="alerts">Alerts</button>
+        <button role="tab" aria-selected="false" data-tab="model">Model</button>
+      </nav>
+
+      <section id="tab-decision" role="tabpanel">
+        <div class="cards" id="cards"></div>
+        <p class="caption">Total cost on the held-out test period (missed fraud + investigations + customers blocked by mistake). Badges compare with the model's default threshold.</p>
+        <div class="panel chart">
+          <h2 class="section">Cost of the threshold policy on the validation period</h2>
+          <div id="curve"></div>
+          <div class="legend">
+            <span><i style="background:var(--accent)"></i>total cost</span>
+            <span><i style="background:var(--good)"></i>chosen threshold t*</span>
+            <span><i style="background:var(--shade);border:1px solid var(--line)"></i>more than K alerts in some hour (not allowed)</span>
+          </div>
+        </div>
+        <div class="panel table-wrap" style="margin-top:16px"><table id="policy-table"></table></div>
+      </section>
+
+      <section id="tab-alerts" role="tabpanel" hidden>
+        <div class="pills" id="policy-pills"></div>
+        <p class="caption" id="alerts-summary" style="margin:0 0 12px"></p>
+        <div class="alerts-grid">
+          <div class="panel table-wrap scroll"><table id="alerts-table"></table></div>
+          <div class="panel" id="alert-detail"></div>
+        </div>
+      </section>
+
+      <section id="tab-model" role="tabpanel" hidden>
+        <div class="panel table-wrap">
+          <h2 class="section">Ranking quality on the test period</h2>
+          <table id="models-table"></table>
+          <p class="note" id="psi-note"></p>
+        </div>
+        <div class="figures" id="figures"></div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<footer id="footer"></footer>
+
+<script src="decision.js"></script>
+<script>
+"use strict";
+const GRID = Decision.thresholdGrid(299);
+const eur = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
+const eur2 = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const pct = (x) => `${Math.round(100 * x)}%`;
+const $ = (id) => document.getElementById(id);
+const PARAMS = ["c_inv", "c_fp", "recovery_rate", "capacity_per_hour"];
+let S, V, T, REASONS, state;
+
+async function column(name, type) {
+  const response = await fetch(`data/${name}`);
+  if (!response.ok) throw new Error(`data/${name}: HTTP ${response.status}`);
+  return new type(await response.arrayBuffer());
+}
+
+async function load() {
+  S = await (await fetch("data/summary.json")).json();
+  const [vp, va, vy, vh, tc, tr, ta, tt, ty, th, reasons] = await Promise.all([
+    column("valid_p.f64", Float64Array), column("valid_amount.f64", Float64Array),
+    column("valid_y.u8", Uint8Array), column("valid_hour.u8", Uint8Array),
+    column("test_p_cal.f64", Float64Array), column("test_p_raw.f64", Float64Array),
+    column("test_amount.f64", Float64Array), column("test_time.u32", Uint32Array),
+    column("test_y.u8", Uint8Array), column("test_hour.u8", Uint8Array),
+    fetch("data/reasons.json").then((r) => r.json()),
+  ]);
+  V = { p: vp, amount: va, y: vy, hour: vh };
+  T = { p_cal: tc, p_raw: tr, amount: ta, time: tt, y: ty, hour: th };
+  REASONS = reasons;
+  state = { params: { ...S.defaults }, policy: 2, selected: null };
+  setupText();
+  setupControls();
+  setupTabs();
+  renderModel();
+  $("loading").hidden = true;
+  $("app").hidden = false;
+  update();
+}
+
+function setupText() {
+  let frauds = 0, stolen = 0;
+  for (let i = 0; i < T.y.length; i++) if (T.y[i]) { frauds++; stolen += T.amount[i]; }
+  $("intro").innerHTML =
+    `A fraud team can only investigate <strong>K alerts per hour</strong>. Which transactions should it look at? ` +
+    `Three policies are replayed on a held-out period of <strong>${eur.format(T.y.length)} real card transactions</strong> ` +
+    `(${frauds} frauds, ${eur.format(stolen)} EUR stolen), never seen in training. Each one is scored by its total cost: ` +
+    `missed fraud, investigation time and customers blocked by mistake. <strong>Move the sliders</strong> to change the ` +
+    `business hypotheses; open <strong>Alerts</strong> to see why the model flags a transaction.`;
+  $("meta").innerHTML =
+    `Model ${S.version} · XGBoost + ${S.calibration} calibration · SHAP reason codes · decisions recomputed in your browser` +
+    (S.repo_url ? ` · <a href="${S.repo_url}">code, method and tests on GitHub</a>` : "");
+  $("footer").innerHTML =
+    `Data: <a href="https://www.kaggle.com/datasets/mlg-ulb/creditcardfraud">Credit Card Fraud Detection</a>, ULB Machine ` +
+    `Learning Group and Worldline, Open Database License (ODbL 1.0); this page redistributes the scored validation and test ` +
+    `periods under the same licence. Scores come from the Python pipeline (XGBoost, calibrated on validation); the decision ` +
+    `rules are re-implemented in JavaScript and checked against the Python code in the project's test suite.`;
+}
+
+function setupControls() {
+  const format = { c_inv: (v) => `${v} EUR`, c_fp: (v) => `${v} EUR`, recovery_rate: (v) => v.toFixed(2), capacity_per_hour: (v) => `${v}` };
+  let timer = null;
+  for (const key of PARAMS) {
+    const input = $(key);
+    input.value = state.params[key];
+    $(`${key}_out`).textContent = format[key](Number(input.value));
+    input.addEventListener("input", () => {
+      state.params[key] = Number(input.value);
+      $(`${key}_out`).textContent = format[key](state.params[key]);
+      clearTimeout(timer);
+      timer = setTimeout(update, 40);
+    });
+  }
+  $("reset").addEventListener("click", () => {
+    state.params = { ...S.defaults };
+    for (const key of PARAMS) {
+      $(key).value = state.params[key];
+      $(`${key}_out`).textContent = format[key](state.params[key]);
+    }
+    update();
+  });
+}
+
+function setupTabs() {
+  document.querySelectorAll(".tabs button").forEach((button) => {
+    button.addEventListener("click", () => {
+      document.querySelectorAll(".tabs button").forEach((b) => b.setAttribute("aria-selected", b === button));
+      for (const name of ["decision", "alerts", "model"]) $(`tab-${name}`).hidden = name !== button.dataset.tab;
+    });
+  });
+}
+
+function compute() {
+  const P = state.params;
+  const K = P.capacity_per_hour;
+  const curve = Decision.thresholdCurve(V.y, V.p, V.amount, V.hour, P, GRID);
+  const tStar = Decision.optimiseThreshold(curve);
+  const policies = [
+    { name: "Model's default threshold (0.5)", alert: Decision.thresholdPolicy(T.p_raw, 0.5, T.hour, K) },
+    { name: `Threshold tuned on validation (t* = ${tStar.toFixed(3)})`, alert: Decision.thresholdPolicy(T.p_cal, tStar, T.hour, K) },
+    { name: "Top-K by expected loss (profitable only)", alert: Decision.topkProfitable(T.p_cal, T.amount, T.hour, K, P) },
+  ];
+  for (const p of policies) p.s = Decision.costSummary(T.y, p.alert, T.amount, P);
+  return { curve, tStar, policies };
+}
+
+function update() {
+  state.result = compute();
+  renderCards();
+  renderCurve();
+  renderPolicyTable();
+  renderAlerts();
+}
+
+function renderCards() {
+  const { policies } = state.result;
+  const ref = policies[0].s.cost;
+  const best = Math.min(...policies.map((p) => p.s.cost));
+  $("cards").innerHTML = policies.map((p, i) => {
+    const diff = p.s.cost - ref;
+    const delta = i === 0 ? `<span class="delta ref">reference</span>`
+      : `<span class="delta ${diff <= 0 ? "down" : "up"}">${diff <= 0 ? "▼" : "▲"} ${eur.format(Math.abs(diff))} EUR</span>`;
+    return `<div class="panel card${p.s.cost === best ? " best" : ""}"><h3>${p.name}</h3>` +
+      `<div class="value">${eur.format(p.s.cost)} EUR</div>${delta}` +
+      `<p class="detail">${p.s.n_alerts} alerts · ${p.s.tp} frauds caught · ${p.s.fp} false positives · ` +
+      `${pct(p.s.amount_recall)} of fraud EUR caught</p></div>`;
+  }).join("");
+}
+
+function renderCurve() {
+  const { curve, tStar } = state.result;
+  // Drawn at the container's width so the labels keep their size on phones.
+  const W = Math.round(Math.min(760, Math.max(300, $("curve").clientWidth || 760)));
+  const H = W < 520 ? 230 : 260, m = { l: 56, r: 12, t: 12, b: 36 };
+  const costs = curve.map((r) => r.cost);
+  const lo = Math.min(...costs), hi = Math.max(...costs);
+  const pad = (hi - lo) * 0.06 || 1;
+  const y0 = lo - pad, y1 = hi + pad;
+  const x = (t) => m.l + t * (W - m.l - m.r);
+  const y = (c) => H - m.b - ((c - y0) / (y1 - y0)) * (H - m.t - m.b);
+  let shade = "";
+  const infeasible = curve.filter((r) => !r.feasible);
+  if (infeasible.length) {
+    const xa = x(curve[0].threshold), xb = x(Math.max(...infeasible.map((r) => r.threshold)));
+    shade = `<rect class="infeasible" x="${xa}" y="${m.t}" width="${xb - xa}" height="${H - m.t - m.b}"/>`;
+  }
+  const path = curve.map((r, i) => `${i ? "L" : "M"}${x(r.threshold).toFixed(1)},${y(r.cost).toFixed(1)}`).join("");
+  let ticks = "";
+  const raw = (y1 - y0) / 4, magnitude = 10 ** Math.floor(Math.log10(raw)), n = raw / magnitude;
+  const step = (n < 1.5 ? 1 : n < 3 ? 2 : n < 7 ? 5 : 10) * magnitude;  // round tick values
+  for (let c = Math.ceil(y0 / step) * step; c <= y1; c += step) {
+    ticks += `<line class="axis" x1="${m.l}" x2="${W - m.r}" y1="${y(c)}" y2="${y(c)}"/>` +
+             `<text x="${m.l - 8}" y="${y(c) + 4}" text-anchor="end">${eur.format(c)}</text>`;
+  }
+  for (let k = 0; k <= 10; k += W < 520 ? 5 : 2) {
+    ticks += `<text x="${x(k / 10)}" y="${H - m.b + 16}" text-anchor="middle">${(k / 10).toFixed(1)}</text>`;
+  }
+  $("curve").innerHTML =
+    `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Validation cost as a function of the threshold">` +
+    `${shade}${ticks}<path class="line" d="${path}"/>` +
+    `<line class="tstar" x1="${x(tStar)}" x2="${x(tStar)}" y1="${m.t}" y2="${H - m.b}"/>` +
+    `<text x="${x(tStar) - 6}" y="${m.t + 12}" text-anchor="end" style="fill:var(--good);font-weight:600">t* = ${tStar.toFixed(3)}</text>` +
+    `<text x="${(m.l + W - m.r) / 2}" y="${H - 4}" text-anchor="middle">threshold on the calibrated probability</text>` +
+    `<line class="hover" id="hover-line" y1="${m.t}" y2="${H - m.b}" visibility="hidden"/>` +
+    `<text id="hover-text" y="${m.t + 28}" visibility="hidden"></text></svg>`;
+  const svg = $("curve").querySelector("svg");
+  svg.addEventListener("mousemove", (event) => {
+    const box = svg.getBoundingClientRect();
+    const t = ((event.clientX - box.left) * (W / box.width) - m.l) / (W - m.l - m.r);
+    if (t < GRID[0] || t > GRID[GRID.length - 1]) return;
+    const row = curve[Math.min(curve.length - 1, Math.max(0, Math.round(t * (GRID.length + 1)) - 1))];
+    const line = $("hover-line"), text = $("hover-text");
+    line.setAttribute("x1", x(row.threshold)); line.setAttribute("x2", x(row.threshold));
+    line.setAttribute("visibility", "visible");
+    text.setAttribute("x", x(row.threshold) + (row.threshold > 0.6 ? -6 : 6));
+    text.setAttribute("text-anchor", row.threshold > 0.6 ? "end" : "start");
+    text.textContent = `t = ${row.threshold.toFixed(3)} · ${eur.format(row.cost)} EUR · max ${row.max_per_hour} alerts/hour`;
+    text.setAttribute("visibility", "visible");
+  });
+  svg.addEventListener("mouseleave", () => {
+    $("hover-line").setAttribute("visibility", "hidden");
+    $("hover-text").setAttribute("visibility", "hidden");
+  });
+}
+
+function renderPolicyTable() {
+  const rows = state.result.policies.map((p) =>
+    `<tr><td>${p.name}</td><td>${eur.format(p.s.cost)}</td><td>${p.s.n_alerts}</td><td>${p.s.tp}</td><td>${p.s.fp}</td>` +
+    `<td>${p.s.fn}</td><td>${pct(p.s.precision)}</td><td>${pct(p.s.recall)}</td><td>${pct(p.s.amount_recall)}</td></tr>`).join("");
+  $("policy-table").innerHTML =
+    `<thead><tr><th>Policy</th><th>Cost (EUR)</th><th>Alerts</th><th>Frauds caught</th><th>False positives</th>` +
+    `<th>Frauds missed</th><th>Precision</th><th>Recall</th><th>Fraud EUR caught</th></tr></thead><tbody>${rows}</tbody>`;
+}
+
+function renderAlerts() {
+  const policies = state.result.policies;
+  $("policy-pills").innerHTML = policies.map((p, i) =>
+    `<button type="button" aria-pressed="${i === state.policy}" data-i="${i}">${p.name}</button>`).join("");
+  $("policy-pills").querySelectorAll("button").forEach((b) => b.addEventListener("click", () => {
+    state.policy = Number(b.dataset.i);
+    state.selected = null;
+    renderAlerts();
+  }));
+  const alert = policies[state.policy].alert;
+  const rows = [];
+  for (let i = 0; i < alert.length; i++) if (alert[i]) rows.push(i);
+  rows.sort((a, b) => T.p_cal[b] * T.amount[b] - T.p_cal[a] * T.amount[a]);
+  const frauds = rows.filter((i) => T.y[i]).length;
+  $("alerts-summary").textContent = `${rows.length} alerts, ${frauds} true frauds, sorted by expected loss (probability × amount). Click a row to see why it was flagged.`;
+  if (state.selected === null || !rows.includes(state.selected)) state.selected = rows.length ? rows[0] : null;
+  $("alerts-table").innerHTML =
+    `<thead><tr><th>Time (h)</th><th>Amount €</th><th>Prob.</th><th>Exp. loss €</th><th>Truth</th></tr></thead><tbody>` +
+    rows.map((i) => `<tr class="clickable${i === state.selected ? " selected" : ""}" data-i="${i}"><td>${(T.time[i] / 3600).toFixed(2)}</td>` +
+      `<td>${eur2.format(T.amount[i])}</td><td>${T.p_cal[i].toFixed(3)}</td><td>${eur2.format(T.p_cal[i] * T.amount[i])}</td>` +
+      `<td><span class="badge ${T.y[i] ? "fraud" : "legit"}">${T.y[i] ? "fraud" : "legitimate"}</span></td></tr>`).join("") +
+    `</tbody>`;
+  $("alerts-table").querySelectorAll("tr.clickable").forEach((tr) => tr.addEventListener("click", () => {
+    state.selected = Number(tr.dataset.i);
+    $("alerts-table").querySelectorAll("tr.selected").forEach((r) => r.classList.remove("selected"));
+    tr.classList.add("selected");
+    renderDetail();
+  }));
+  renderDetail();
+}
+
+function renderDetail() {
+  const i = state.selected;
+  if (i === null) { $("alert-detail").innerHTML = `<p class="note">No alert under these hypotheses.</p>`; return; }
+  const codes = REASONS[String(i)];
+  const head = `<h2 class="section">Why this transaction was flagged</h2>` +
+    `<p class="note" style="margin-top:0">t = ${(T.time[i] / 3600).toFixed(2)} h · ${eur2.format(T.amount[i])} EUR · ` +
+    `probability ${T.p_cal[i].toFixed(3)} · <span class="badge ${T.y[i] ? "fraud" : "legit"}">${T.y[i] ? "fraud" : "legitimate"}</span></p>`;
+  if (!codes) {
+    $("alert-detail").innerHTML = head + `<p class="note">Reason codes are precomputed for the transactions most likely to be alerted; this one is not among them.</p>`;
+    return;
+  }
+  const max = Math.max(...codes.map((c) => Math.abs(c[3])));
+  $("alert-detail").innerHTML = head + codes.map(([feature, label, value, contribution]) =>
+    `<div class="reason"><div class="row"><span><strong>${feature}</strong> · ${label}</span>` +
+    `<span>${contribution > 0 ? "+" : ""}${contribution.toFixed(2)}</span></div>` +
+    `<div class="bar${contribution < 0 ? " neg" : ""}" style="width:${(100 * Math.abs(contribution) / max).toFixed(1)}%"></div>` +
+    `<div class="note">value after feature engineering: ${value.toFixed(3)}</div></div>`).join("") +
+    `<p class="note">SHAP values in log-odds of the uncalibrated model: how much each feature pushes this score towards fraud. ` +
+    `V1 to V28 are anonymised PCA components of the original data.</p>`;
+}
+
+function renderModel() {
+  $("models-table").innerHTML =
+    `<thead><tr><th>Model</th><th>PR-AUC</th><th>95% bootstrap CI</th><th>ROC-AUC</th><th>Brier</th></tr></thead><tbody>` +
+    S.models.map((m) => `<tr><td>${m.label}</td><td>${m.pr_auc.toFixed(3)}</td><td>${m.lo.toFixed(3)} – ${m.hi.toFixed(3)}</td>` +
+      `<td>${m.roc_auc.toFixed(3)}</td><td>${m.brier.toFixed(5)}</td></tr>`).join("") + `</tbody>`;
+  $("psi-note").textContent = `PR-AUC of a random model = fraud rate (${(100 * S.test_fraud_rate).toFixed(2)}%). ` +
+    `Drift of the score between training and test periods: PSI ${S.score_psi.toFixed(3)} (${S.score_psi_status}).`;
+  $("figures").innerHTML = S.figures.map((f) =>
+    `<figure><img src="${f.file}" alt="${f.caption}" loading="lazy"><figcaption>${f.caption}</figcaption></figure>`).join("");
+}
+
+let resizeTimer = null;
+window.addEventListener("resize", () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => state && state.result && renderCurve(), 150);
+});
+
+load().catch((error) => {
+  $("loading").textContent = `Could not load the data: ${error.message}`;
+});
+</script>
+</body>
+</html>
